@@ -1,0 +1,235 @@
+diff --git a/app/Makefile b/app/Makefile
+index a6cb1f9..6aec8f7 100644
+--- a/app/Makefile
++++ b/app/Makefile
+@@ -51,7 +51,7 @@ SRCS-y := \
+ 	pktgen-main.c pktgen-pcap.c pktgen-range.c pktgen-cpu.c \
+ 	pktgen-seq.c pktgen-dump.c pktgen-capture.c pktgen-stats.c \
+ 	pktgen-port-cfg.c pktgen-ipv6.c pktgen-ipv4.c pktgen-arp.c \
+-	pktgen-gre.c pktgen-ether.c pktgen-tcp.c pktgen-udp.c pktgen-vlan.c \
++	pktgen-gre.c pktgen-ether.c pktgen-tcp.c pktgen-udp.c pktgen-dns.c pktgen-vlan.c \
+ 	pktgen-random.c pktgen-display.c pktgen-log.c pktgen-gtpu.c
+ 
+ # GUI support is a work in progress
+diff --git a/app/cmd-functions.c b/app/cmd-functions.c
+index b2fda7c..c348e73 100644
+--- a/app/cmd-functions.c
++++ b/app/cmd-functions.c
+@@ -303,6 +303,8 @@ const char *help_info[] = {
+ 	"pkt.size max <portlist> value      - Set pkt size maximum address",
+ 	"pkt.size inc <portlist> value      - Set pkt size increment address",
+ 	"range <portlist> <state>           - Enable or Disable the given portlist for sending a range of packets",
++	"range.proto <portlist> [tcp|udp|icmp]",
++	"				    - Set ip proto for sending a range of packets",
+ 	"",
+ 	"<<PageBreak>>",
+ 	"       Flags: P---------------- - Promiscuous mode enabled",
+diff --git a/app/pktgen-range.c b/app/pktgen-range.c
+index ec4b2b3..a33beda 100644
+--- a/app/pktgen-range.c
++++ b/app/pktgen-range.c
+@@ -68,6 +68,7 @@
+ #include "pktgen-display.h"
+ #include "pktgen-log.h"
+ #include "pktgen.h"
++#include "xorshift128plus.h"
+ 
+ /**************************************************************************//**
+  *
+@@ -132,9 +133,9 @@ pktgen_range_ctor(range_info_t *range, pkt_seq_t *pkt)
+ 					p = range->src_ip_max;
+ 				else if (p > range->src_ip_max)
+ 					p = range->src_ip_min;
+-				pkt->ip_src_addr.addr.ipv4.s_addr = p;
++				pkt->ip_src_addr.addr.ipv4.s_addr = random_32() ;
+ 			} else
+-				pkt->ip_src_addr.addr.ipv4.s_addr = range->src_ip;
++				pkt->ip_src_addr.addr.ipv4.s_addr = random_32();
+ 
+ 			if (unlikely(range->dst_ip_inc != 0)) {
+ 				uint32_t p = pkt->ip_dst_addr.addr.ipv4.s_addr;
+diff --git a/app/pktgen-tcp.c b/app/pktgen-tcp.c
+index 3c8a853..e320648 100644
+--- a/app/pktgen-tcp.c
++++ b/app/pktgen-tcp.c
+@@ -68,6 +68,7 @@
+ #include "pktgen.h"
+ 
+ #include "pktgen-tcp.h"
++#include "xorshift128plus.h"
+ 
+ /**************************************************************************//**
+  *
+@@ -100,10 +101,10 @@ pktgen_tcp_hdr_ctor(pkt_seq_t *pkt, tcpip_t *tip, int type __rte_unused)
+ 
+ 	tip->tcp.sport      = htons(pkt->sport);
+ 	tip->tcp.dport      = htons(pkt->dport);
+-	tip->tcp.seq        = htonl(DEFAULT_PKT_NUMBER);
+-	tip->tcp.ack        = htonl(DEFAULT_ACK_NUMBER);
++	tip->tcp.seq        = htonl(random_32());
++	tip->tcp.ack        = 0;
+ 	tip->tcp.offset     = ((sizeof(tcpHdr_t) / sizeof(uint32_t)) << 4);	/* Offset in words */
+-	tip->tcp.flags      = ACK_FLAG;						/* ACK */
++	tip->tcp.flags      = SYN_FLAG;						/* ACK */
+ 	tip->tcp.window     = htons(DEFAULT_WND_SIZE);
+ 	tip->tcp.urgent     = 0;
+ 
+diff --git a/app/pktgen.c b/app/pktgen.c
+index a0705ab..172b993 100644
+--- a/app/pktgen.c
++++ b/app/pktgen.c
+@@ -74,6 +74,7 @@
+ #include "pktgen-ipv4.h"
+ #include "pktgen-ipv6.h"
+ #include "pktgen-udp.h"
++#include "pktgen-dns.h"
+ #include "pktgen-arp.h"
+ #include "pktgen-vlan.h"
+ #include "pktgen-cpu.h"
+@@ -560,22 +561,31 @@ pktgen_packet_ctor(port_info_t *info, int32_t seq_idx, int32_t type)
+ 				        sizeof(gtpuHdr_t);
+ 			}
+ 		} else if (pkt->ipProto == PG_IPPROTO_UDP) {
+-			if (pkt->dport != PG_IPPROTO_L4_GTPU_PORT) {
+-				udpip_t   *udp;
++			if (pkt->dport == PG_IPPROTO_L4_DNS_PORT) {
++				dnsUdpIp_t   *udpDns;
+ 
+-				/* Construct the Ethernet header */
+-				/* udp = (udpip_t *)pktgen_ether_hdr_ctor(info, pkt, eth); */
+-				udp = (udpip_t *)ether_hdr;
++				udpDns = (dnsUdpIp_t *)ether_hdr;
++
++				/* Construct the DNS header */
++				pktgen_dns_hdr_ctor(pkt,
++				                     (dnsHdr_t *)udpDns,
++				                     pkt->ipProto);
+ 
+ 				/* Construct the UDP header */
+-				pktgen_udp_hdr_ctor(pkt, udp, ETHER_TYPE_IPv4);
++				pktgen_udp_hdr_ctor(pkt,
++				                    (udpip_t *)udpDns,
++				                    ETHER_TYPE_IPv4);
+ 
+ 				/* IPv4 Header constructor */
+-				pktgen_ipv4_ctor(pkt, (ipHdr_t *)udp);
++				pktgen_ipv4_ctor(pkt, (ipHdr_t *)udpDns);
+ 
+ 				pkt->tlen = pkt->ether_hdr_size +
+-				        sizeof(ipHdr_t) + sizeof(udpHdr_t);
+-			} else {
++				        sizeof(ipHdr_t) + sizeof(udpHdr_t) +
++				        sizeof(dnsHdr_t) + sizeof(dnsQuery_t);
++	                        pktgen_log_info("DNS pkt->tlen %d", pkt->tlen);
++
++
++			} else if (pkt->dport == PG_IPPROTO_L4_GTPU_PORT) {
+ 				gtpuUdpIp_t   *udpGtpu;
+ 
+ 				udpGtpu = (gtpuUdpIp_t *)ether_hdr;
+@@ -596,6 +606,22 @@ pktgen_packet_ctor(port_info_t *info, int32_t seq_idx, int32_t type)
+ 				pkt->tlen = pkt->ether_hdr_size +
+ 				        sizeof(ipHdr_t) + sizeof(udpHdr_t) +
+ 				        sizeof(gtpuHdr_t);
++			} else {
++				udpip_t   *udp;
++
++				/* Construct the Ethernet header */
++				/* udp = (udpip_t *)pktgen_ether_hdr_ctor(info, pkt, eth); */
++				udp = (udpip_t *)ether_hdr;
++
++				/* Construct the UDP header */
++				pktgen_udp_hdr_ctor(pkt, udp, ETHER_TYPE_IPv4);
++
++				/* IPv4 Header constructor */
++				pktgen_ipv4_ctor(pkt, (ipHdr_t *)udp);
++
++				pkt->tlen = pkt->ether_hdr_size +
++				        	sizeof(ipHdr_t) + sizeof(udpHdr_t);
++
+ 			}
+ 		} else if (pkt->ipProto == PG_IPPROTO_ICMP) {
+ 			udpip_t           *uip;
+diff --git a/app/xorshift128plus.h b/app/xorshift128plus.h
+index 9e7978e..17221ac 100644
+--- a/app/xorshift128plus.h
++++ b/app/xorshift128plus.h
+@@ -35,4 +35,23 @@ xor_next(void) {
+ 	       s0;				/* b, c */
+ }
+ 
++static inline uint32_t
++random_32(void)
++{
++        return xor_next();
++}
++
++static inline uint16_t
++random_16(void)
++{
++        return xor_next();
++}
++
++static inline uint8_t
++random_ch(void)
++{
++        return  "abcdefghigklmnopkrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[random_16() % 62];
++}
++
++
+ #endif  /* _XORSHIFT128PLUS_H_ */
+diff --git a/lib/common/wr_inet.h b/lib/common/wr_inet.h
+index c006632..a4af2f3 100644
+--- a/lib/common/wr_inet.h
++++ b/lib/common/wr_inet.h
+@@ -189,6 +189,7 @@ typedef struct ipv6Hdr_s {
+ #define PG_IPPROTO_MAX          256
+ 
+ #define PG_IPPROTO_L4_GTPU_PORT 2152
++#define PG_IPPROTO_L4_DNS_PORT 53 
+ 
+ #define IPv4(a, b, c, d)   ((uint32_t)(((a) & 0xff) << 24) |   \
+ 	                    (((b) & 0xff) << 16) |      \
+@@ -259,6 +260,42 @@ typedef struct udpip_s {
+ 	udpHdr_t udp;	/* UDP header for protocol */
+ } __attribute__((__packed__)) udpip_t;
+ 
++/* DNS Header */
++typedef struct dnsHdr_s {
++	uint16_t id;	/* query id */
++	uint16_t flags;	/* DNS flags */
++	uint16_t qdcount; /* number of entries in the question section */
++	uint16_t ancount; /* number of resource records in the answer section */
++	uint16_t nscount; /* number of name server resource records in the authority records section */
++	uint16_t arcount; /* number of resource records in the additional records section */
++} __attribute__((__packed__)) dnsHdr_t;
++
++/* The DNS/UDP/IP Pseudo header */
++typedef struct dnsUdpIp_s {
++	ipOverlay_t ip;	/* IPv4 overlay header */
++	udpHdr_t udp;	/* UDP header for protocol */
++	dnsHdr_t dns;	/* DNS header */
++} __attribute__((__packed__)) dnsUdpIp_t;
++
++/* DNS Query */
++typedef struct dnsQuery_s {
++	uint8_t count1;          /* Count of the SLD name. must be 6! */
++	uint8_t ch1;
++	uint8_t ch2;
++	uint8_t ch3;
++	uint8_t ch4;
++	uint8_t ch5;
++	uint8_t ch6;
++	uint8_t count2;         /* Count of the TLD name. must be 3! */
++	uint8_t ch7;
++	uint8_t ch8;
++	uint8_t ch9;
++	uint8_t null;           /* The final null */
++	uint16_t qtype;         /* Question Type */
++	uint16_t qclass;        /* Question Class */
++} __attribute__((__packed__)) dnsQuery_t;
++
++
+ /* The GTP-U/UDP/IP Pseudo header */
+ typedef struct gtpuUdpIp_s {
+ 	ipOverlay_t ip;	/* IPv4 overlay header */

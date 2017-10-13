@@ -1,0 +1,743 @@
+commit 2826d96976b2a43826c3cf4e0fb4b9daab60589a
+Author: Vincent Li <vincent.mc.li@gmail.com>
+Date:   Fri May 27 13:37:24 2016 -0700
+
+    Allow DPDK Pktgen to do tcp syn flooding and dns flooding
+
+diff --git a/app/Makefile b/app/Makefile
+index a6cb1f9..6aec8f7 100644
+--- a/app/Makefile
++++ b/app/Makefile
+@@ -51,7 +51,7 @@ SRCS-y := \
+ 	pktgen-main.c pktgen-pcap.c pktgen-range.c pktgen-cpu.c \
+ 	pktgen-seq.c pktgen-dump.c pktgen-capture.c pktgen-stats.c \
+ 	pktgen-port-cfg.c pktgen-ipv6.c pktgen-ipv4.c pktgen-arp.c \
+-	pktgen-gre.c pktgen-ether.c pktgen-tcp.c pktgen-udp.c pktgen-vlan.c \
++	pktgen-gre.c pktgen-ether.c pktgen-tcp.c pktgen-udp.c pktgen-dns.c pktgen-vlan.c \
+ 	pktgen-random.c pktgen-display.c pktgen-log.c pktgen-gtpu.c
+ 
+ # GUI support is a work in progress
+diff --git a/app/cmd-functions.c b/app/cmd-functions.c
+index b2fda7c..c348e73 100644
+--- a/app/cmd-functions.c
++++ b/app/cmd-functions.c
+@@ -303,6 +303,8 @@ const char *help_info[] = {
+ 	"pkt.size max <portlist> value      - Set pkt size maximum address",
+ 	"pkt.size inc <portlist> value      - Set pkt size increment address",
+ 	"range <portlist> <state>           - Enable or Disable the given portlist for sending a range of packets",
++	"range.proto <portlist> [tcp|udp|icmp]",
++	"				    - Set ip proto for sending a range of packets",
+ 	"",
+ 	"<<PageBreak>>",
+ 	"       Flags: P---------------- - Promiscuous mode enabled",
+diff --git a/app/pktgen-dns.c b/app/pktgen-dns.c
+new file mode 100644
+index 0000000..0548fd0
+--- /dev/null
++++ b/app/pktgen-dns.c
+@@ -0,0 +1,131 @@
++/*-
++ * Copyright (c) <2010>, Intel Corporation
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ * - Redistributions of source code must retain the above copyright
++ *   notice, this list of conditions and the following disclaimer.
++ *
++ * - Redistributions in binary form must reproduce the above copyright
++ *   notice, this list of conditions and the following disclaimer in
++ *   the documentation and/or other materials provided with the
++ *   distribution.
++ *
++ * - Neither the name of Intel Corporation nor the names of its
++ *   contributors may be used to endorse or promote products derived
++ *   from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
++ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
++ * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
++ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
++ * OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/**
++ * Copyright (c) <2010-2014>, Wind River Systems, Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without modification, are
++ * permitted provided that the following conditions are met:
++ *
++ * 1) Redistributions of source code must retain the above copyright notice,
++ * this list of conditions and the following disclaimer.
++ *
++ * 2) Redistributions in binary form must reproduce the above copyright notice,
++ * this list of conditions and the following disclaimer in the documentation and/or
++ * other materials provided with the distribution.
++ *
++ * 3) Neither the name of Wind River Systems nor the names of its contributors may be
++ * used to endorse or promote products derived from this software without specific
++ * prior written permission.
++ *
++ * 4) The screens displayed by the application must contain the copyright notice as defined
++ * above and can not be removed without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++ *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
++ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++/* Created 2010 by Keith Wiles @ intel.com */
++
++#include "pktgen.h"
++
++#include "pktgen-dns.h"
++#include "xorshift128plus.h"
++
++/**************************************************************************//**
++ *
++ * pktgen_dns_hdr_ctor -  DNS header constructor routine.
++ *
++ * DESCRIPTION
++ * Construct the DNS header in a packer buffer.
++ *
++ * RETURNS: N/A
++ *
++ * SEE ALSO:
++ */
++
++void
++pktgen_dns_hdr_ctor(pkt_seq_t *pkt __rte_unused, dnsHdr_t *duip, uint16_t ipProto)
++{
++        unsigned char *buffer = (unsigned char *)duip;
++        unsigned int l4HdrSize = 0;
++
++        if (ipProto == PG_IPPROTO_UDP)
++                l4HdrSize = sizeof(udpHdr_t);
++        else
++                l4HdrSize = sizeof(tcpHdr_t);
++
++        dnsHdr_t *dnsHdr =
++                (dnsHdr_t *)(buffer + sizeof(ipHdr_t) + l4HdrSize);
++
++        dnsQuery_t *dnsQuery =
++                (dnsQuery_t *)(buffer + sizeof(ipHdr_t) + l4HdrSize + sizeof(dnsHdr_t));
++
++
++	/* Zero out the header space */
++	memset((char *)dnsHdr, 0, sizeof(dnsHdr_t));
++
++	/* Create the DNS header */
++	dnsHdr->id      = htons(random_16());
++	dnsHdr->flags   = htons(0x0100);
++	dnsHdr->qdcount	= htons(1);
++	dnsHdr->ancount	= 0;
++	dnsHdr->nscount	= 0;
++	dnsHdr->arcount	= 0;
++
++	/* Create the DNS Query */
++	dnsQuery->count1 = 0x6;
++	dnsQuery->count2 = 0x3;
++	dnsQuery->ch7 = 'o';
++	dnsQuery->ch8 = 'r';
++  	dnsQuery->ch9 = 'g';
++  	dnsQuery->null = htons(0x0);
++  	dnsQuery->qtype = htons (0x1);
++  	dnsQuery->qclass = htons (0x1);
++
++
++	dnsQuery->ch1 = random_ch();
++	dnsQuery->ch2 = random_ch();
++	dnsQuery->ch3 = random_ch();
++	dnsQuery->ch4 = random_ch();
++	dnsQuery->ch5 = random_ch();
++	dnsQuery->ch6 = random_ch();
++}
+diff --git a/app/pktgen-dns.h b/app/pktgen-dns.h
+new file mode 100644
+index 0000000..3be863e
+--- /dev/null
++++ b/app/pktgen-dns.h
+@@ -0,0 +1,92 @@
++/*-
++ * Copyright (c) <2015>, Intel Corporation
++ * All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ * - Redistributions of source code must retain the above copyright
++ *   notice, this list of conditions and the following disclaimer.
++ *
++ * - Redistributions in binary form must reproduce the above copyright
++ *   notice, this list of conditions and the following disclaimer in
++ *   the documentation and/or other materials provided with the
++ *   distribution.
++ *
++ * - Neither the name of Intel Corporation nor the names of its
++ *   contributors may be used to endorse or promote products derived
++ *   from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
++ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
++ * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
++ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
++ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
++ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
++ * OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/**
++ * Copyright (c) <2010-2014>, Wind River Systems, Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without modification, are
++ * permitted provided that the following conditions are met:
++ *
++ * 1) Redistributions of source code must retain the above copyright notice,
++ * this list of conditions and the following disclaimer.
++ *
++ * 2) Redistributions in binary form must reproduce the above copyright notice,
++ * this list of conditions and the following disclaimer in the documentation and/or
++ * other materials provided with the distribution.
++ *
++ * 3) Neither the name of Wind River Systems nor the names of its contributors may be
++ * used to endorse or promote products derived from this software without specific
++ * prior written permission.
++ *
++ * 4) The screens displayed by the application must contain the copyright notice as defined
++ * above and can not be removed without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
++ *  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
++ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
++ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
++ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
++ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
++ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
++ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
++ * USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++/* Created 2015 by abhinandan.gujjar@intel.com */
++
++#ifndef _PKTGEN_DNS_H_
++#define _PKTGEN_DNS_H_
++
++#include <wr_inet.h>
++
++#include "pktgen-seq.h"
++
++
++/**************************************************************************//**
++ *
++ * pktgen_dns_hdr_ctor - DNS header constructor routine.
++ *
++ * DESCRIPTION
++ * Construct the DNS header in a packer buffer.
++ *
++ * RETURNS: N/A
++ *
++ * SEE ALSO:
++ */
++
++extern void pktgen_dns_hdr_ctor(pkt_seq_t *pkt __rte_unused,
++                                 dnsHdr_t *duip,
++                                 uint16_t ipProto);
++
++#endif  /* _PKTGEN_DNS_H_ */
+diff --git a/app/pktgen-range.c b/app/pktgen-range.c
+index ec4b2b3..a33beda 100644
+--- a/app/pktgen-range.c
++++ b/app/pktgen-range.c
+@@ -68,6 +68,7 @@
+ #include "pktgen-display.h"
+ #include "pktgen-log.h"
+ #include "pktgen.h"
++#include "xorshift128plus.h"
+ 
+ /**************************************************************************//**
+  *
+@@ -132,9 +133,9 @@ pktgen_range_ctor(range_info_t *range, pkt_seq_t *pkt)
+ 					p = range->src_ip_max;
+ 				else if (p > range->src_ip_max)
+ 					p = range->src_ip_min;
+-				pkt->ip_src_addr.addr.ipv4.s_addr = p;
++				pkt->ip_src_addr.addr.ipv4.s_addr = random_32() ;
+ 			} else
+-				pkt->ip_src_addr.addr.ipv4.s_addr = range->src_ip;
++				pkt->ip_src_addr.addr.ipv4.s_addr = random_32();
+ 
+ 			if (unlikely(range->dst_ip_inc != 0)) {
+ 				uint32_t p = pkt->ip_dst_addr.addr.ipv4.s_addr;
+diff --git a/app/pktgen-tcp.c b/app/pktgen-tcp.c
+index 3c8a853..e320648 100644
+--- a/app/pktgen-tcp.c
++++ b/app/pktgen-tcp.c
+@@ -68,6 +68,7 @@
+ #include "pktgen.h"
+ 
+ #include "pktgen-tcp.h"
++#include "xorshift128plus.h"
+ 
+ /**************************************************************************//**
+  *
+@@ -100,10 +101,10 @@ pktgen_tcp_hdr_ctor(pkt_seq_t *pkt, tcpip_t *tip, int type __rte_unused)
+ 
+ 	tip->tcp.sport      = htons(pkt->sport);
+ 	tip->tcp.dport      = htons(pkt->dport);
+-	tip->tcp.seq        = htonl(DEFAULT_PKT_NUMBER);
+-	tip->tcp.ack        = htonl(DEFAULT_ACK_NUMBER);
++	tip->tcp.seq        = htonl(random_32());
++	tip->tcp.ack        = 0;
+ 	tip->tcp.offset     = ((sizeof(tcpHdr_t) / sizeof(uint32_t)) << 4);	/* Offset in words */
+-	tip->tcp.flags      = ACK_FLAG;						/* ACK */
++	tip->tcp.flags      = SYN_FLAG;						/* ACK */
+ 	tip->tcp.window     = htons(DEFAULT_WND_SIZE);
+ 	tip->tcp.urgent     = 0;
+ 
+diff --git a/app/pktgen.c b/app/pktgen.c
+index a0705ab..172b993 100644
+--- a/app/pktgen.c
++++ b/app/pktgen.c
+@@ -74,6 +74,7 @@
+ #include "pktgen-ipv4.h"
+ #include "pktgen-ipv6.h"
+ #include "pktgen-udp.h"
++#include "pktgen-dns.h"
+ #include "pktgen-arp.h"
+ #include "pktgen-vlan.h"
+ #include "pktgen-cpu.h"
+@@ -560,22 +561,31 @@ pktgen_packet_ctor(port_info_t *info, int32_t seq_idx, int32_t type)
+ 				        sizeof(gtpuHdr_t);
+ 			}
+ 		} else if (pkt->ipProto == PG_IPPROTO_UDP) {
+-			if (pkt->dport != PG_IPPROTO_L4_GTPU_PORT) {
+-				udpip_t   *udp;
++			if (pkt->dport == PG_IPPROTO_L4_DNS_PORT) {
++				dnsUdpIp_t   *udpDns;
+ 
+-				/* Construct the Ethernet header */
+-				/* udp = (udpip_t *)pktgen_ether_hdr_ctor(info, pkt, eth); */
+-				udp = (udpip_t *)ether_hdr;
++				udpDns = (dnsUdpIp_t *)ether_hdr;
++
++				/* Construct the DNS header */
++				pktgen_dns_hdr_ctor(pkt,
++				                     (dnsHdr_t *)udpDns,
++				                     pkt->ipProto);
+ 
+ 				/* Construct the UDP header */
+-				pktgen_udp_hdr_ctor(pkt, udp, ETHER_TYPE_IPv4);
++				pktgen_udp_hdr_ctor(pkt,
++				                    (udpip_t *)udpDns,
++				                    ETHER_TYPE_IPv4);
+ 
+ 				/* IPv4 Header constructor */
+-				pktgen_ipv4_ctor(pkt, (ipHdr_t *)udp);
++				pktgen_ipv4_ctor(pkt, (ipHdr_t *)udpDns);
+ 
+ 				pkt->tlen = pkt->ether_hdr_size +
+-				        sizeof(ipHdr_t) + sizeof(udpHdr_t);
+-			} else {
++				        sizeof(ipHdr_t) + sizeof(udpHdr_t) +
++				        sizeof(dnsHdr_t) + sizeof(dnsQuery_t);
++	                        pktgen_log_info("DNS pkt->tlen %d", pkt->tlen);
++
++
++			} else if (pkt->dport == PG_IPPROTO_L4_GTPU_PORT) {
+ 				gtpuUdpIp_t   *udpGtpu;
+ 
+ 				udpGtpu = (gtpuUdpIp_t *)ether_hdr;
+@@ -596,6 +606,22 @@ pktgen_packet_ctor(port_info_t *info, int32_t seq_idx, int32_t type)
+ 				pkt->tlen = pkt->ether_hdr_size +
+ 				        sizeof(ipHdr_t) + sizeof(udpHdr_t) +
+ 				        sizeof(gtpuHdr_t);
++			} else {
++				udpip_t   *udp;
++
++				/* Construct the Ethernet header */
++				/* udp = (udpip_t *)pktgen_ether_hdr_ctor(info, pkt, eth); */
++				udp = (udpip_t *)ether_hdr;
++
++				/* Construct the UDP header */
++				pktgen_udp_hdr_ctor(pkt, udp, ETHER_TYPE_IPv4);
++
++				/* IPv4 Header constructor */
++				pktgen_ipv4_ctor(pkt, (ipHdr_t *)udp);
++
++				pkt->tlen = pkt->ether_hdr_size +
++				        	sizeof(ipHdr_t) + sizeof(udpHdr_t);
++
+ 			}
+ 		} else if (pkt->ipProto == PG_IPPROTO_ICMP) {
+ 			udpip_t           *uip;
+diff --git a/app/xorshift128plus.h b/app/xorshift128plus.h
+index 9e7978e..17221ac 100644
+--- a/app/xorshift128plus.h
++++ b/app/xorshift128plus.h
+@@ -35,4 +35,23 @@ xor_next(void) {
+ 	       s0;				/* b, c */
+ }
+ 
++static inline uint32_t
++random_32(void)
++{
++        return xor_next();
++}
++
++static inline uint16_t
++random_16(void)
++{
++        return xor_next();
++}
++
++static inline uint8_t
++random_ch(void)
++{
++        return  "abcdefghigklmnopkrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[random_16() % 62];
++}
++
++
+ #endif  /* _XORSHIFT128PLUS_H_ */
+diff --git a/dnsflood.txt b/dnsflood.txt
+new file mode 100644
+index 0000000..243b471
+--- /dev/null
++++ b/dnsflood.txt
+@@ -0,0 +1,128 @@
++#
++# Pktgen - Ver: 2.9.17 (DPDK 16.04.0-rc2)
++# Copyright (c) <2010-2016>, Intel Corporation. All rights reserved., Powered by Intel® DPDK
++
++# Command line arguments: (DPDK args are defaults)
++# ./app/app/x86_64-native-linuxapp-gcc/pktgen -c ff -n 3 -m 512 --proc-type primary -- -P -m [0:1-7].0  
++
++#######################################################################
++# Pktgen Configuration script information:
++#   GUI socket is Not Enabled
++#   Flags 00040004
++#   Number of ports: 1
++#   Number ports per page: 4
++#   Number descriptors: RX 512 TX: 512
++#   Promiscuous mode is Enabled
++
++
++#######################################################################
++# Global configuration:
++geometry 132x44
++mac_from_arp disable
++
++######################### Port  0 ##################################
++#
++# Port:  0, Burst: 32, Rate:100%, Flags:c0000010, TX Count:Forever
++#           SeqCnt:0, Prime:1 VLAN ID:0001, Link: <UP-10000-FD>
++#
++# Set up the primary port information:
++set 0 count 0
++set 0 size 64
++set 0 rate 100
++set 0 burst 32
++set 0 sport 1234
++set 0 dport 5678
++set 0 prime 1
++type ipv4 0
++proto udp 0
++set ip dst 0 10.2.72.97
++#set ip dst 0 10.1.72.8
++set ip src 0 10.1.72.154/24
++#vpr 172.24.15.7
++#set mac 0 00:23:E9:12:AA:01
++#10200 172.24.40.6
++#set mac 0 00:23:E9:E5:F2:C3
++#4200 172.24.46.39
++#set mac 0 00:23:E9:63:5B:83
++#5200 172.24.19.15 
++set mac 0 00:23:E9:6C:74:83
++vlanid 0 1
++
++#pattern 0 user 
++#user.pattern 0 000011111111111111 
++
++latency 0 disable
++mpls 0 disable
++mpls_entry 0 0
++qinq 0 disable
++qinqids 0 0 0
++gre 0 disable
++gre_eth 0 disable
++gre_key 0 0
++#
++# Port flag values:
++icmp.echo 0 disable
++pcap 0 disable
++range 0 enable
++range.proto 0 udp
++process 0 disable
++capture 0 disable
++rxtap 0 disable
++txtap 0 disable
++vlan 0 disable
++
++#
++# Range packet information:
++src.mac start 0 00:50:56:86:10:76
++src.mac min 0 00:00:00:00:00:00
++src.mac max 0 00:00:00:00:00:00
++src.mac inc 0 00:00:00:00:00:00
++dst.mac start 0 00:23:E9:6C:74:83
++#dst.mac start 0 00:23:E9:E5:F2:C3
++#dst.mac start 0 00:23:E9:12:AA:01
++#dst.mac start 0 00:23:E9:63:5B:83
++#dst.mac start 0 00:50:56:86:84:90
++dst.mac min 0 00:00:00:00:00:00
++dst.mac max 0 00:00:00:00:00:00
++dst.mac inc 0 00:00:00:00:00:00
++
++src.ip start 0 10.1.72.154
++src.ip min 0 10.1.72.154
++src.ip max 0 10.1.72.254
++src.ip inc 0 0.0.0.1
++
++dst.ip start 0 10.2.72.97
++dst.ip min 0 10.2.72.97
++dst.ip max 0 10.2.72.200
++dst.ip inc 0 0.0.0.1
++
++#dst.ip start 0 10.1.72.8
++#dst.ip min 0 10.1.72.8
++#dst.ip max 0 10.1.72.8
++#dst.ip inc 0 0.0.0.1
++
++src.port start 0 1025
++src.port min 0 1025
++src.port max 0 65512
++src.port inc 0 1
++
++dst.port start 0 53 
++dst.port min 0 0
++dst.port max 0 0
++dst.port inc 0 0
++
++vlan.id start 0 1
++vlan.id min 0 1
++vlan.id max 0 4095
++vlan.id inc 0 0
++
++pkt.size start 0 74
++pkt.size min 0 74
++pkt.size max 0 1518
++pkt.size inc 0 0
++
++#
++# Set up the sequence data for the port.
++set 0 seqCnt 0
++
++################################ Done #################################
+diff --git a/lib/common/wr_inet.h b/lib/common/wr_inet.h
+index c006632..a4af2f3 100644
+--- a/lib/common/wr_inet.h
++++ b/lib/common/wr_inet.h
+@@ -189,6 +189,7 @@ typedef struct ipv6Hdr_s {
+ #define PG_IPPROTO_MAX          256
+ 
+ #define PG_IPPROTO_L4_GTPU_PORT 2152
++#define PG_IPPROTO_L4_DNS_PORT 53 
+ 
+ #define IPv4(a, b, c, d)   ((uint32_t)(((a) & 0xff) << 24) |   \
+ 	                    (((b) & 0xff) << 16) |      \
+@@ -259,6 +260,42 @@ typedef struct udpip_s {
+ 	udpHdr_t udp;	/* UDP header for protocol */
+ } __attribute__((__packed__)) udpip_t;
+ 
++/* DNS Header */
++typedef struct dnsHdr_s {
++	uint16_t id;	/* query id */
++	uint16_t flags;	/* DNS flags */
++	uint16_t qdcount; /* number of entries in the question section */
++	uint16_t ancount; /* number of resource records in the answer section */
++	uint16_t nscount; /* number of name server resource records in the authority records section */
++	uint16_t arcount; /* number of resource records in the additional records section */
++} __attribute__((__packed__)) dnsHdr_t;
++
++/* The DNS/UDP/IP Pseudo header */
++typedef struct dnsUdpIp_s {
++	ipOverlay_t ip;	/* IPv4 overlay header */
++	udpHdr_t udp;	/* UDP header for protocol */
++	dnsHdr_t dns;	/* DNS header */
++} __attribute__((__packed__)) dnsUdpIp_t;
++
++/* DNS Query */
++typedef struct dnsQuery_s {
++	uint8_t count1;          /* Count of the SLD name. must be 6! */
++	uint8_t ch1;
++	uint8_t ch2;
++	uint8_t ch3;
++	uint8_t ch4;
++	uint8_t ch5;
++	uint8_t ch6;
++	uint8_t count2;         /* Count of the TLD name. must be 3! */
++	uint8_t ch7;
++	uint8_t ch8;
++	uint8_t ch9;
++	uint8_t null;           /* The final null */
++	uint16_t qtype;         /* Question Type */
++	uint16_t qclass;        /* Question Class */
++} __attribute__((__packed__)) dnsQuery_t;
++
++
+ /* The GTP-U/UDP/IP Pseudo header */
+ typedef struct gtpuUdpIp_s {
+ 	ipOverlay_t ip;	/* IPv4 overlay header */
+diff --git a/synflood.txt b/synflood.txt
+new file mode 100644
+index 0000000..0e8f728
+--- /dev/null
++++ b/synflood.txt
+@@ -0,0 +1,127 @@
++#
++# Pktgen - Ver: 2.9.17 (DPDK 16.04.0-rc2)
++# Copyright (c) <2010-2016>, Intel Corporation. All rights reserved., Powered by Intel® DPDK
++
++# Command line arguments: (DPDK args are defaults)
++# ./app/app/x86_64-native-linuxapp-gcc/pktgen -c ff -n 3 -m 512 --proc-type primary -- -P -m [0:1-7].0  
++
++#######################################################################
++# Pktgen Configuration script information:
++#   GUI socket is Not Enabled
++#   Flags 00040004
++#   Number of ports: 1
++#   Number ports per page: 4
++#   Number descriptors: RX 512 TX: 512
++#   Promiscuous mode is Enabled
++
++
++#######################################################################
++# Global configuration:
++geometry 132x44
++mac_from_arp disable
++
++######################### Port  0 ##################################
++#
++# Port:  0, Burst: 32, Rate:100%, Flags:c0000010, TX Count:Forever
++#           SeqCnt:0, Prime:1 VLAN ID:0001, Link: <UP-10000-FD>
++#
++# Set up the primary port information:
++set 0 count 0
++set 0 size 64
++set 0 rate 100
++set 0 burst 32
++set 0 sport 1234
++set 0 dport 5678
++set 0 prime 1
++type ipv4 0
++proto tcp 0
++set ip dst 0 10.2.72.97
++#set ip dst 0 10.1.72.8
++set ip src 0 10.1.72.154/24
++#vpr 172.24.15.7
++#set mac 0 00:23:E9:12:AA:01
++#10200 172.24.40.6
++#set mac 0 00:23:E9:E5:F2:C3
++#4200 172.24.46.39
++#set mac 0 00:23:E9:63:5B:83
++#5200 172.24.19.15 
++set mac 0 00:23:E9:6C:74:83
++vlanid 0 1
++
++pattern 0 zero
++user.pattern 0 0123456789abcdef
++
++latency 0 disable
++mpls 0 disable
++mpls_entry 0 0
++qinq 0 disable
++qinqids 0 0 0
++gre 0 disable
++gre_eth 0 disable
++gre_key 0 0
++#
++# Port flag values:
++icmp.echo 0 disable
++pcap 0 disable
++range 0 enable
++process 0 disable
++capture 0 disable
++rxtap 0 disable
++txtap 0 disable
++vlan 0 disable
++
++#
++# Range packet information:
++src.mac start 0 00:50:56:86:10:76
++src.mac min 0 00:00:00:00:00:00
++src.mac max 0 00:00:00:00:00:00
++src.mac inc 0 00:00:00:00:00:00
++dst.mac start 0 00:23:E9:6C:74:83
++#dst.mac start 0 00:23:E9:E5:F2:C3
++#dst.mac start 0 00:23:E9:12:AA:01
++#dst.mac start 0 00:23:E9:63:5B:83
++#dst.mac start 0 00:50:56:86:84:90
++dst.mac min 0 00:00:00:00:00:00
++dst.mac max 0 00:00:00:00:00:00
++dst.mac inc 0 00:00:00:00:00:00
++
++src.ip start 0 10.1.72.154
++src.ip min 0 10.1.72.154
++src.ip max 0 10.1.72.254
++src.ip inc 0 0.0.0.1
++
++dst.ip start 0 10.2.72.97
++dst.ip min 0 10.2.72.97
++dst.ip max 0 10.2.72.200
++dst.ip inc 0 0.0.0.1
++
++#dst.ip start 0 10.1.72.8
++#dst.ip min 0 10.1.72.8
++#dst.ip max 0 10.1.72.8
++#dst.ip inc 0 0.0.0.1
++
++src.port start 0 1025
++src.port min 0 1025
++src.port max 0 65512
++src.port inc 0 1
++
++dst.port start 0 80
++dst.port min 0 0
++dst.port max 0 0
++dst.port inc 0 0
++
++vlan.id start 0 1
++vlan.id min 0 1
++vlan.id max 0 4095
++vlan.id inc 0 0
++
++pkt.size start 0 64
++pkt.size min 0 64
++pkt.size max 0 1518
++pkt.size inc 0 0
++
++#
++# Set up the sequence data for the port.
++set 0 seqCnt 0
++
++################################ Done #################################

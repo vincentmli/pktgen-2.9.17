@@ -1,0 +1,129 @@
+#
+# Pktgen - Ver: 2.9.17 (DPDK 16.04.0-rc2)
+# Copyright (c) <2010-2016>, Intel Corporation. All rights reserved., Powered by Intel® DPDK
+
+# Command line arguments: (DPDK args are defaults)
+# ./app/app/x86_64-native-linuxapp-gcc/pktgen -c ff -n 3 -m 512 --proc-type primary -- -P -m [0:1-7].0  
+
+#######################################################################
+# Pktgen Configuration script information:
+#   GUI socket is Not Enabled
+#   Flags 00040004
+#   Number of ports: 1
+#   Number ports per page: 4
+#   Number descriptors: RX 512 TX: 512
+#   Promiscuous mode is Enabled
+
+
+#######################################################################
+# Global configuration:
+geometry 132x44
+mac_from_arp disable
+
+######################### Port  0 ##################################
+#
+# Port:  0, Burst: 32, Rate:100%, Flags:c0000010, TX Count:Forever
+#           SeqCnt:0, Prime:1 VLAN ID:0001, Link: <UP-10000-FD>
+#
+# Set up the primary port information:
+set 0 count 0
+#set 0 size 64
+set 0 rate 100 
+set 0 burst 32
+set 0 sport 1234
+set 0 dport 5678
+set 0 prime 1
+type ipv4 0
+proto udp 0
+set ip dst 0 10.1.72.68
+#set ip dst 0 10.1.72.8
+set ip src 0 10.1.72.154/24
+#vpr 172.24.15.7
+#set mac 0 00:23:E9:12:AA:01
+#10200 172.24.40.6
+#set mac 0 00:23:E9:E5:F2:C3
+#4200 172.24.46.39
+#set mac 0 00:23:E9:63:5B:83
+#5200 172.24.19.15 
+set mac 0 52:54:00:76:da:6a
+vlanid 0 1
+
+#pattern 0 user 
+#user.pattern 0 000011111111111111 
+dns.domain 0 www.example.com
+
+latency 0 disable
+mpls 0 disable
+mpls_entry 0 0
+qinq 0 disable
+qinqids 0 0 0
+gre 0 disable
+gre_eth 0 disable
+gre_key 0 0
+#
+# Port flag values:
+icmp.echo 0 disable
+pcap 0 disable
+range 0 enable
+range.proto 0 udp
+process 0 disable
+capture 0 disable
+rxtap 0 disable
+txtap 0 disable
+vlan 0 disable
+
+#
+# Range packet information:
+src.mac start 0 90:e2:ba:93:26:0c
+src.mac min 0 00:00:00:00:00:00
+src.mac max 0 00:00:00:00:00:00
+src.mac inc 0 00:00:00:00:00:00
+dst.mac start 0 52:54:00:76:da:6a
+#dst.mac start 0 00:23:E9:E5:F2:C3
+#dst.mac start 0 00:23:E9:12:AA:01
+#dst.mac start 0 00:23:E9:63:5B:83
+#dst.mac start 0 00:50:56:86:84:90
+dst.mac min 0 00:00:00:00:00:00
+dst.mac max 0 00:00:00:00:00:00
+dst.mac inc 0 00:00:00:00:00:00
+
+src.ip start 0 10.1.72.154
+src.ip min 0 10.1.72.154
+src.ip max 0 10.1.72.164
+src.ip inc 0 0.0.0.1
+
+dst.ip start 0 10.1.72.68
+dst.ip min 0 10.1.72.68
+dst.ip max 0 10.1.72.68
+dst.ip inc 0 0.0.0.1
+
+#dst.ip start 0 10.1.72.8
+#dst.ip min 0 10.1.72.8
+#dst.ip max 0 10.1.72.8
+#dst.ip inc 0 0.0.0.1
+
+src.port start 0 1025
+src.port min 0 1025
+src.port max 0 65512
+src.port inc 0 1
+
+dst.port start 0 53 
+dst.port min 0 0
+dst.port max 0 0
+dst.port inc 0 0
+
+vlan.id start 0 1
+vlan.id min 0 1
+vlan.id max 0 4095
+vlan.id inc 0 0
+
+pkt.size start 0 64
+pkt.size min 0 64
+pkt.size max 0 1518
+pkt.size inc 0 0
+
+#
+# Set up the sequence data for the port.
+set 0 seqCnt 0
+
+################################ Done #################################
